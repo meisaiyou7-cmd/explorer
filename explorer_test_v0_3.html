@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0b1020">
+<title>探索器 TEST v0.3</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#0b1020;color:#eef2ff}
+header{padding:18px 16px;border-bottom:1px solid #27304a;background:#11182c;position:sticky;top:0;z-index:5}
+h1{font-size:21px;margin:0 0 4px}.sub{color:#9ca8c7;font-size:13px}
+main{padding:14px;max-width:900px;margin:auto}
+.card{background:#11182c;border:1px solid #27304a;border-radius:14px;padding:14px;margin:12px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+input,textarea,button{font:inherit;border-radius:10px;border:1px solid #34405f;padding:11px;background:#0d1426;color:#fff}
+input,textarea{width:100%}textarea{min-height:105px;resize:vertical}
+button{cursor:pointer;background:#1d2945}button.primary{background:#3158a8;border-color:#416cc6}
+.status{font-weight:700}.green{color:#61e294}.blue{color:#7fb0ff}.amber{color:#ffd166}.red{color:#ff7777}
+.log{font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;background:#080d18;padding:12px;border-radius:10px;max-height:300px;overflow:auto}
+.obs{padding:10px 0;border-bottom:1px solid #27304a}.muted{color:#9ca8c7;font-size:12px}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#1d2945;font-size:12px}
+.notice{background:#17213a;border:1px solid #34405f;border-radius:10px;padding:10px;font-size:13px;color:#cbd5f0}
+a{color:#8db8ff;word-break:break-all}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+<h1>🔎 探索器 TEST v0.3</h1>
+<div class="sub">AIオーケストレーター接続版・Safari実行前提</div>
+</header>
+<main>
+<div class="notice">
+この画面は <b>Safari / Webアプリ環境</b>での実行を前提にしています。<br>
+「ファイル」アプリのプレビューではJavaScriptが動かない場合があります。
+</div>
+
+<div class="card">
+<div>状態：<span id="status" class="status green">⏸ 待機中</span></div>
+<div class="muted" id="organ">現在の器官：—</div>
+<div style="margin-top:8px"><span class="badge" id="sessionBadge">session: —</span></div>
+</div>
+
+<div class="card">
+<h3>🧠 探索指示</h3>
+<textarea id="cmd" placeholder="例：浅野典子と氷室京介について、直接関係だけでなく、共演者・番組・ラジオ・周辺人物から3方向に掘る"></textarea>
+<div style="margin-top:8px"><input id="api" placeholder="実探索APIのURL（空欄＝ローカル試験）"></div>
+<div class="row" style="margin-top:8px">
+<button class="primary" id="startBtn">探索開始</button>
+<button id="demoBtn">自動デモ</button>
+<button id="testBtn">API接続テスト</button>
+<button id="clearBtn">クリア</button>
+</div>
+</div>
+
+<div class="card">
+<h3>📡 LIVE</h3>
+<div id="log" class="log">待機しています…</div>
+</div>
+
+<div class="card">
+<h3>👁️ 観測結果 <span class="badge" id="count">0</span></h3>
+<div id="obs"><span class="muted">まだありません</span></div>
+</div>
+
+<div class="card">
+<h3>📒 捜査台帳</h3>
+<div id="ledger"><span class="muted">このブラウザ内に簡易保存されます</span></div>
+</div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let timer = null;
+let observations = [];
+const SESSION_KEY = "explorer_session_v03";
+const OBS_KEY = "explorer_obs_v03";
+
+function makeSession(){
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return "s-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+}
+let sessionId = localStorage.getItem(SESSION_KEY) || makeSession();
+localStorage.setItem(SESSION_KEY, sessionId);
+$("sessionBadge").textContent = "session: " + sessionId.slice(0,8);
+
+function addLog(s){
+  const t = new Date().toLocaleTimeString();
+  const old = $("log").textContent;
+  $("log").textContent = (old === "待機しています…" ? "" : old + "\n") + `[${t}] ${s}`;
+  $("log").scrollTop = $("log").scrollHeight;
+}
+function setState(s, organ, cls){
+  $("status").textContent = s;
+  $("status").className = "status " + cls;
+  $("organ").textContent = "現在の器官：" + organ;
+}
+function esc(s){
+  return String(s ?? "").replace(/[&<>"']/g,c=>({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+function safeUrl(url){
+  try{
+    const u = new URL(url);
+    return (u.protocol === "http:" || u.protocol === "https:") ? u.href : "";
+  }catch{return "";}
+}
+function addObs(kind,title,note="",url="",confidence=""){
+  observations.push({kind,title,note,url,confidence,at:new Date().toLocaleString()});
+  localStorage.setItem(OBS_KEY, JSON.stringify(observations));
+  renderObs(); renderLedger();
+}
+function renderObs(){
+  $("count").textContent = observations.length;
+  $("obs").innerHTML = observations.length
+    ? observations.slice().reverse().map(o=>{
+        const u = safeUrl(o.url);
+        return `<div class="obs"><b>${esc(o.kind)}</b> ${esc(o.title)}
+          ${u ? `<br><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>` : ""}
+          <br><span class="muted">${esc(o.note)}${o.confidence!=="" ? ` / confidence=${esc(o.confidence)}`:""} / ${esc(o.at)}</span>
+        </div>`;
+      }).join("")
+    : '<span class="muted">まだありません</span>';
+}
+function renderLedger(){
+  $("ledger").innerHTML = observations.length
+    ? observations.slice().reverse().map((o,i)=>
+        `<div class="obs">#${observations.length-i} / ${esc(o.kind)} / ${esc(o.title)}</div>`
+      ).join("")
+    : '<span class="muted">このブラウザ内に簡易保存されます</span>';
+}
+async function realExplore(cmd,api){
+  setState("🟡 探索中","AI→探索API","amber");
+  addLog("実探索APIへ指示を送信");
+  const r = await fetch(api,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      instruction:cmd,
+      session_id:sessionId,
+      context:observations.slice(-30),
+      preferred_organ:"auto"
+    })
+  });
+  if(!r.ok) throw new Error(`API ${r.status}`);
+  const d = await r.json();
+  setState(d.status || "🟢 観測", d.organ || "探索器", "green");
+  addLog(d.message || "探索結果を受信");
+  (d.observations || []).forEach(o =>
+    addObs(o.type||"candidate",o.title||"無題",o.snippet||o.note||"",o.url||"",o.confidence??"")
+  );
+  (d.next_hints || []).forEach(h => addObs("HUNCH","次の探索枝",h));
+}
+function simulatedExplore(cmd){
+  if(timer) clearInterval(timer);
+  observations=[]; localStorage.setItem(OBS_KEY,"[]"); renderObs(); renderLedger();
+  $("log").textContent="";
+  const steps=[
+    ["🔎 Web探索","検索の目","指示を分解。対象・期間・関係語を候補化"],
+    ["🔎 Web探索","検索の目","複数の探索枝を生成。対象を固定しない"],
+    ["📝 全文回収","ページの目","候補ページを本文観測キューへ"],
+    ["🔗 逆引き","リンクの目","人物・番組・媒体・関連語から枝を増やす"],
+    ["🎥 動画探索","動画の目","動画・ラジオ・音声候補を確認キューへ"],
+    ["👂 音声確認","耳","怪しい発言を実音声確認キューへ"],
+    ["🧠 次手判断","AI判断","観測結果から次に掘る価値の高い枝を選択"]
+  ];
+  let i=0;
+  addLog("受信した指示："+cmd);
+  timer=setInterval(()=>{
+    if(i>=steps.length){
+      clearInterval(timer); timer=null;
+      setState("🔵 一区切り","待機 / 次のAI指示","blue");
+      addLog("探索ループ終了（ローカル試験）。");
+      addObs("HUNCH","実探索接続待ち","APIを接続するとここから実データを受け取れる。");
+      return;
+    }
+    const [st,org,msg]=steps[i++];
+    setState(st,org,"green"); addLog(msg);
+    if(i===3) addObs("candidate","実Web接続ポイント","ここからAPI経由で実際の観測を投入する。");
+    if(i===6) addObs("ear_queue","音声確認候補","実音声確認は外部探索器側で取得し、必要箇所だけAIへ返す設計。");
+  },500);
+}
+async function start(){
+  const cmd=$("cmd").value.trim() || "テスト探索";
+  const api=$("api").value.trim();
+  if(timer) clearInterval(timer);
+  if(api){
+    try{ await realExplore(cmd,api); }
+    catch(e){
+      setState("🔴 接続失敗","API","red");
+      addLog("実探索APIに接続できません："+e.message);
+      addLog("安全のためローカル試験へ切り替えます。");
+      simulatedExplore(cmd);
+    }
+  }else simulatedExplore(cmd);
+}
+async function testApi(){
+  const api=$("api").value.trim();
+  if(!api){ addLog("API欄が空です。ローカル試験を使います。"); return; }
+  setState("🟡 接続確認","API","amber"); addLog("API接続を確認中…");
+  try{
+    const r=await fetch(api,{method:"OPTIONS"});
+    addLog(`API応答：HTTP ${r.status}`);
+    setState("🟢 接続候補あり","API","green");
+  }catch(e){
+    setState("🔴 接続失敗","API","red");
+    addLog("接続確認失敗："+e.message);
+  }
+}
+function demo(){
+  $("cmd").value="AIが浅野典子と氷室京介の情報を多方面から探索する";
+  start();
+}
+function clearAll(){
+  if(timer) clearInterval(timer);
+  observations=[];
+  localStorage.removeItem(OBS_KEY);
+  $("log").textContent="待機しています…";
+  renderObs(); renderLedger();
+  setState("⏸ 待機中","—","green");
+}
+$("startBtn").addEventListener("click",start);
+$("demoBtn").addEventListener("click",demo);
+$("testBtn").addEventListener("click",testApi);
+$("clearBtn").addEventListener("click",clearAll);
+
+try{
+  observations=JSON.parse(localStorage.getItem(OBS_KEY)||"[]");
+  if(!Array.isArray(observations)) observations=[];
+}catch{observations=[];}
+renderObs(); renderLedger();
+</script>
+</body>
+</html>
