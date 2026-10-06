@@ -1,0 +1,12 @@
+{
+  "name": "2847-command-center-minimal",
+  "version": "0.1.0",
+  "description": "2847 AI Command Center Minimal Receiver for Step 3-A",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
