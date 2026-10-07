@@ -150,6 +150,7 @@ async function realExplore(cmd,api){
         url:"",
         confidence:"",
     }
+    }
   });
   if(!r.ok) throw new Error(`API ${r.status}`);
   const d = await r.json();
